@@ -98,7 +98,10 @@ void PhraseBoost::build(const transcribe::Tokenizer & tok, const std::vector<std
             nodes_[static_cast<size_t>(s)].end = true;
             ++n_phrases_;
         }
-        {
+        // Per-phrase dump only on request: a resident caller starts a stream
+        // per utterance, and the glossary is often private.
+        static const bool dump = std::getenv("TRANSCRIBE_PARAKEET_VOCAB_BOOST_DEBUG") != nullptr;
+        if (dump) {
             std::string pieces;
             for (const int32_t id : ids) {
                 pieces += tok.token(id) + " ";
