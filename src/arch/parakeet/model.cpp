@@ -28,6 +28,7 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-prompting.h"
 #include "transcribe/parakeet.h"
 #include "weights.h"
 
@@ -386,7 +387,39 @@ void reset_streaming_decoder_state(ParakeetSession * pc, const ParakeetModel * p
     pc->stream_dec_state.lstm_state.reset(n_layers, pred_hidden);
     pc->stream_dec_state.prev_token_id = -1;
     pc->stream_dec_state.frame_offset  = 0;
+    pc->stream_dec_state.boost_state   = 0;
     pc->stream_dec_state.initialized   = true;
+}
+
+// Phrase-boost weight: the stream extension's vocabulary_boost when set
+// (> 0 a weight, < 0 off), else TRANSCRIBE_PARAKEET_VOCAB_BOOST, else the
+// library default.
+float resolve_vocabulary_boost(const transcribe_stream_params * stream_params) {
+    const transcribe_ext * family = stream_params != nullptr ? stream_params->family : nullptr;
+    if (family != nullptr && family->kind == TRANSCRIBE_EXT_KIND_PARAKEET_STREAM &&
+        family->size >= sizeof(struct transcribe_parakeet_stream_ext)) {
+        const float v = reinterpret_cast<const transcribe_parakeet_stream_ext *>(family)->vocabulary_boost;
+        if (v != 0.0f) {
+            return v > 0.0f ? v : 0.0f;
+        }
+    }
+    if (const char * e = transcribe::env::str("TRANSCRIBE_PARAKEET_VOCAB_BOOST")) {
+        return std::max(0.0f, std::strtof(e, nullptr));
+    }
+    return PhraseBoost::kDefaultWeight;
+}
+
+// (Re)build the session's phrase-boost graph from run_params.vocabulary.
+// Transducer heads only; CTC decoding has no boosting hook.
+void build_phrase_boost(ParakeetSession *                pc,
+                        const ParakeetModel *            pm,
+                        const transcribe_run_params *    params,
+                        const transcribe_stream_params * stream_params) {
+    pc->phrase_boost.clear();
+    if (params == nullptr || params->n_vocabulary <= 0 || pm->host_decoder.head_kind == HostHeadKind::CTC) {
+        return;
+    }
+    pc->phrase_boost.build(pm->tok, transcribe::prompting::terms(params), resolve_vocabulary_boost(stream_params));
 }
 
 namespace {
@@ -586,6 +619,10 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (const transcribe_status st = build_host_decoder_weights(*m, m->host_decoder); st != TRANSCRIBE_OK) {
         return st;
     }
+
+    // Vocabulary = phrase boosting in the transducer greedy decoders
+    // (phrase_boost.h); needs the SentencePiece encoder for the terms.
+    transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_VOCABULARY, m->host_decoder.head_kind != HostHeadKind::CTC);
 
     // Multitalker bundle post-load: fuse the diarizer conformer's BN (needs
     // uploaded data), build its ceil-framed mel frontend, and publish the
@@ -822,15 +859,18 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
     }
 
     pc->raw_tokens.clear();
+    build_phrase_boost(pc, pm, params, nullptr);
     const int64_t t_dec_start = ggml_time_us();
     {
         transcribe_status st = TRANSCRIBE_OK;
         switch (pm->host_decoder.head_kind) {
             case HostHeadKind::TDT:
-                st = decode_tdt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens);
+                st = decode_tdt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens,
+                                       &pc->phrase_boost);
                 break;
             case HostHeadKind::RNNT:
-                st = decode_rnnt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens);
+                st = decode_rnnt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens,
+                                        &pc->phrase_boost);
                 break;
             case HostHeadKind::CTC:
                 st = decode_ctc_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens);
@@ -2775,13 +2815,15 @@ transcribe_status emit_streaming_chunk(ParakeetSession * pc,
     pc->stream_caches.chunk_step += 1;
 
     // Run streaming RNN-T decoder on the new encoder frames.
+    const int64_t t_dec_start = ggml_time_us();
     if (const transcribe_status st = decode_rnnt_greedy_streaming(
             pm->host_decoder, pc->enc_host.data(), T_q_new, d_enc, pc->stream_dec_state.lstm_state,
             pc->stream_dec_state.prev_token_id, static_cast<int>(pc->stream_dec_state.frame_offset), pc->n_threads,
-            pc->raw_tokens);
+            pc->raw_tokens, &pc->phrase_boost, &pc->stream_dec_state.boost_state);
         st != TRANSCRIBE_OK) {
         return st;
     }
+    pc->t_decode_us += ggml_time_us() - t_dec_start;
 
     pc->stream_dec_state.frame_offset += T_q_new;
     // Cursor advances by mel_frames_advance (NeMo's shift_size),
@@ -3172,7 +3214,7 @@ transcribe_status emit_buffered_chunk(ParakeetSession * pc,
     if (const transcribe_status st = decode_rnnt_greedy_streaming(
             pm->host_decoder, enc_chunk, T_to_decode, d_enc, pc->stream_dec_state.lstm_state,
             pc->stream_dec_state.prev_token_id, static_cast<int>(pc->stream_dec_state.frame_offset), pc->n_threads,
-            pc->raw_tokens);
+            pc->raw_tokens, &pc->phrase_boost, &pc->stream_dec_state.boost_state);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -3433,6 +3475,7 @@ transcribe_status stream_begin(transcribe_session *             session,
         pc->raw_tokens.clear();
         pc->stream_run_params = *run_params;
         reset_streaming_decoder_state(pc, pm);
+        build_phrase_boost(pc, pm, run_params, stream_params);
         // frame_offset starts at 0, advanced per-chunk by T_to_decode.
         pc->stream_dec_state.frame_offset = 0;
 
@@ -3472,6 +3515,7 @@ transcribe_status stream_begin(transcribe_session *             session,
     }
     zero_streaming_caches(pc);
     reset_streaming_decoder_state(pc, pm);
+    build_phrase_boost(pc, pm, run_params, stream_params);
 
     // Resolve chunking geometry (NeMo's setup_streaming_params):
     //   chunk_size_subsequent = subsampling_factor * (1 + R)

@@ -61,9 +61,28 @@ extern "C" {
 struct transcribe_parakeet_stream_ext {
     struct transcribe_ext ext;
     int32_t               att_context_right;
+    /*
+     * vocabulary_boost
+     *
+     *   Phrase-boost weight for transcribe_run_params::vocabulary on
+     *   transducer (RNN-T / TDT) parakeet models: the per-token bonus,
+     *   in logit (nat) units, added to tokens that extend a partially
+     *   matched vocabulary phrase during greedy decoding (half for a
+     *   phrase's first token; revoked if the match breaks).
+     *
+     *     0 (default): library default (3.0, or the
+     *                  TRANSCRIBE_PARAKEET_VOCAB_BOOST env var if set).
+     *     > 0:         that weight.
+     *     < 0:         boosting off (the vocabulary is ignored).
+     *
+     *   Occupies what was tail padding, so sizeof is unchanged and a
+     *   zero-initialized struct from an older caller selects the default.
+     */
+    float                 vocabulary_boost;
 };
 
-/* Fills ext.size/kind and att_context_right = -1 (model default). */
+/* Fills ext.size/kind, att_context_right = -1 (model default) and
+ * vocabulary_boost = 0 (library default). */
 TRANSCRIBE_API void transcribe_parakeet_stream_ext_init(struct transcribe_parakeet_stream_ext * ext);
 
 /*

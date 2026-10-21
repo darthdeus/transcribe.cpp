@@ -1009,6 +1009,35 @@ float token_confidence(const float * token_logits, int n_token_classes, std::vec
     return static_cast<float>(1.0 - entropy / max_entropy);
 }
 
+// Phrase-boosted token argmax: with no (or an empty) boost graph this is
+// exactly argmax_range over the raw logits. Otherwise the token logits
+// are copied to `scratch`, shifted by the graph's per-token deltas from
+// trie state `state`, and argmaxed there; the raw logits (and so the
+// token confidence) are left untouched.
+int boosted_argmax(const PhraseBoost *  boost,
+                   int32_t              state,
+                   const float *        token_logits,
+                   int                  n_token_cls,
+                   int                  blank_id,
+                   std::vector<float> & scratch) {
+    if (boost == nullptr || boost->empty()) {
+        return argmax_range(token_logits, n_token_cls);
+    }
+    scratch.assign(token_logits, token_logits + n_token_cls);
+    boost->apply(state, scratch.data(), n_token_cls, blank_id);
+    return argmax_range(scratch.data(), n_token_cls);
+}
+
+// Move the trie state over an emitted non-blank token.
+void advance_boost(const PhraseBoost * boost, int32_t & state, int token) {
+    if (boost == nullptr || boost->empty()) {
+        return;
+    }
+    int32_t next = 0;
+    boost->delta(state, token, &next);
+    state = next;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -1020,7 +1049,8 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
                                     int                        T_enc,
                                     int                        d_enc,
                                     int                        n_threads,
-                                    std::vector<TdtToken> &    out_tokens) {
+                                    std::vector<TdtToken> &    out_tokens,
+                                    const PhraseBoost *        boost) {
     if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1080,8 +1110,10 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     std::vector<float> scratch_x;
     std::vector<float> scratch_probs;
     std::vector<float> logits;
+    std::vector<float> boosted;          // phrase-boost scratch (unused without a graph)
+    int32_t            boost_state = 0;  // phrase-boost trie state (root)
 
-    int last_token  = -1;  // sentinel: no previous token (start state)
+    int last_token  = -1;                // sentinel: no previous token (start state)
     int step        = 0;
     int new_symbols = 0;
 
@@ -1131,7 +1163,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         const float * token_logits    = logits.data();
         const float * duration_logits = logits.data() + n_token_cls;
 
-        const int pred_token = argmax_range(token_logits, n_token_cls);
+        const int pred_token = boosted_argmax(boost, boost_state, token_logits, n_token_cls, blank_id, boosted);
         const int decision   = argmax_range(duration_logits, n_dur);
         const int duration   = w.tdt_durations[static_cast<size_t>(decision)];
 
@@ -1170,6 +1202,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
             out_tokens.push_back(tok);
 
             last_token = pred_token;
+            advance_boost(boost, boost_state, pred_token);
             std::swap(state, next_state);  // commit
             predictor_dirty = true;
         }
@@ -1254,7 +1287,8 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
                                      int                        T_enc,
                                      int                        d_enc,
                                      int                        n_threads,
-                                     std::vector<TdtToken> &    out_tokens) {
+                                     std::vector<TdtToken> &    out_tokens,
+                                     const PhraseBoost *        boost) {
     if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1302,6 +1336,8 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
     std::vector<float> scratch_x;
     std::vector<float> scratch_probs;
     std::vector<float> logits;
+    std::vector<float> boosted;          // phrase-boost scratch (unused without a graph)
+    int32_t            boost_state = 0;  // phrase-boost trie state (root)
 
     int last_token  = -1;
     int step        = 0;
@@ -1342,7 +1378,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 
         // RNNT joint output is just `n_token_cls` floats (no duration extras).
         const float * token_logits = logits.data();
-        const int     pred_token   = argmax_range(token_logits, n_token_cls);
+        const int     pred_token   = boosted_argmax(boost, boost_state, token_logits, n_token_cls, blank_id, boosted);
 
         if (iter == 1 && transcribe::debug::enabled()) {
             const long long s_h = H;
@@ -1375,6 +1411,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
             out_tokens.push_back(tok);
 
             last_token = pred_token;
+            advance_boost(boost, boost_state, pred_token);
             std::swap(state, next_state);
             predictor_dirty = true;
 
@@ -1419,7 +1456,9 @@ transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
                                                int &                      last_token_io,
                                                int                        frame_offset,
                                                int                        n_threads,
-                                               std::vector<TdtToken> &    out_tokens) {
+                                               std::vector<TdtToken> &    out_tokens,
+                                               const PhraseBoost *        boost,
+                                               int32_t *                  boost_state_io) {
     if (enc_out == nullptr || T_enc_new <= 0 || d_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1490,6 +1529,8 @@ transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
     std::vector<float> scratch_x;
     std::vector<float> scratch_probs;
     std::vector<float> logits;
+    std::vector<float> boosted;
+    int32_t            boost_state = boost_state_io != nullptr ? *boost_state_io : 0;
 
     int last_token  = last_token_io;
     int step        = 0;
@@ -1520,7 +1561,7 @@ transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
         }
 
         const float * token_logits = logits.data();
-        const int     pred_token   = argmax_range(token_logits, n_token_cls);
+        const int     pred_token   = boosted_argmax(boost, boost_state, token_logits, n_token_cls, blank_id, boosted);
 
         const bool is_blank = (pred_token == blank_id);
         if (is_blank) {
@@ -1536,6 +1577,7 @@ transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
             out_tokens.push_back(tok);
 
             last_token = pred_token;
+            advance_boost(boost, boost_state, pred_token);
             std::swap(state, next_state);
             predictor_dirty = true;
 
@@ -1556,6 +1598,9 @@ transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
     // non-blank state (the predictor's "current" since the last emit).
     state_io      = std::move(state);
     last_token_io = last_token;
+    if (boost_state_io != nullptr) {
+        *boost_state_io = boost_state;
+    }
     return TRANSCRIBE_OK;
 }
 

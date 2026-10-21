@@ -52,7 +52,7 @@ pub struct MoonshineStreamingOptions {
 }
 
 /// Parakeet cache-aware streaming knobs (stream slot).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -60,6 +60,10 @@ pub struct MoonshineStreamingOptions {
 )]
 pub struct ParakeetStreamOptions {
     pub att_context_right: Option<i32>,
+    /// Phrase-boost weight for `RunOptions::vocabulary` on transducer
+    /// parakeet models (per-token logit bonus; `None` = library default,
+    /// negative = off).
+    pub vocabulary_boost: Option<f32>,
 }
 
 /// Parakeet chunked-attention buffered streaming knobs (stream slot).
@@ -182,7 +186,7 @@ pub enum RunExtension {
 }
 
 /// A family extension for the stream slot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StreamExtension {
@@ -284,6 +288,7 @@ impl StreamExtension {
                 let mut e: sys::transcribe_parakeet_stream_ext = unsafe { std::mem::zeroed() };
                 unsafe { sys::transcribe_parakeet_stream_ext_init(&mut e) };
                 set(&mut e.att_context_right, o.att_context_right);
+                set(&mut e.vocabulary_boost, o.vocabulary_boost);
                 StreamExtRaw::ParakeetStream(Box::new(e))
             }
             StreamExtension::ParakeetBuffered(o) => {

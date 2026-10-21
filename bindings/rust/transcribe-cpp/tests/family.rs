@@ -70,6 +70,7 @@ fn parakeet_cache_aware_streams_with_extension() {
         // att_context_right = -1 selects the model's default (max-accuracy) menu entry.
         family: Some(StreamExtension::ParakeetStream(ParakeetStreamOptions {
             att_context_right: Some(-1),
+            ..Default::default()
         })),
         ..Default::default()
     };

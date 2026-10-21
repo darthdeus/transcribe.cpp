@@ -247,6 +247,9 @@ struct ParakeetStreamingDecoderState {
     // Last emitted non-blank token id (predictor input); -1 = SOS.
     int32_t prev_token_id = -1;
 
+    // Phrase-boost trie state (0 = root); carries across chunks.
+    int32_t boost_state = 0;
+
     // Absolute encoder-frame offset for converting per-chunk step_at_emit
     // into stream-wide frame indices.
     int64_t frame_offset = 0;
@@ -318,6 +321,10 @@ struct ParakeetSession final : public transcribe_session {
     std::vector<float>    pos_div_term;
     std::vector<float>    enc_host;
     std::vector<TdtToken> raw_tokens;
+
+    // Phrase-boost graph built from run_params.vocabulary at run() /
+    // stream_begin; empty (no-op) without a vocabulary.
+    PhraseBoost phrase_boost;
 
     // Multitalker bundle scratch: streaming-diarizer AOSC/FIFO state for
     // the embedded sortformer forward (diarize=ON runs only).

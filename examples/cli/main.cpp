@@ -99,6 +99,9 @@ void print_usage(const char * argv0) {
                  "                        setting from the model's training menu;\n"
                  "                        nemotron-speech-streaming-en-0.6b accepts\n"
                  "                        R in {0,1,6,13}; default = model's first choice\n"
+                 "  --vocabulary-boost F  (parakeet streaming) phrase-boost weight for\n"
+                 "                        --vocabulary (0 = default 3.0, < 0 = off);\n"
+                 "                        needs --stream-att-right\n"
                  "  --stream-buf-left-ms N  (parakeet-unified buffered streaming)\n"
                  "                        left-context size in ms; -1 = model default\n"
                  "  --stream-buf-chunk-ms N (parakeet-unified buffered streaming)\n"
@@ -495,6 +498,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 std::fprintf(stderr, "error: --stream-att-right must be >= 0\n");
                 return false;
             }
+        } else if (a == "--vocabulary-boost") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.vocabulary_boost = std::strtof(v, nullptr);
         } else if (a == "--stream-buf-left-ms") {
             const char * v = take_value(a.c_str());
             if (!v) {

@@ -544,6 +544,7 @@ int run_asr_batch(const cli_args & args, std::ofstream * output) {
                 if (want_cache_aware && transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM,
                                                                           TRANSCRIBE_EXT_KIND_PARAKEET_STREAM)) {
                     pkt_sp.att_context_right = args.stream_att_right;
+                    pkt_sp.vocabulary_boost  = args.vocabulary_boost;
                     sp.family                = &pkt_sp.ext;
                 } else if (want_buffered &&
                            transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM,
@@ -800,6 +801,7 @@ int run_asr_file(const cli_args &           args,
         if (want_cache_aware &&
             transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM, TRANSCRIBE_EXT_KIND_PARAKEET_STREAM)) {
             pkt_sp.att_context_right = args.stream_att_right;
+            pkt_sp.vocabulary_boost  = args.vocabulary_boost;
             sp.family                = &pkt_sp.ext;
             std::printf("stream: att_context_right=%d\n", args.stream_att_right);
         } else if (want_buffered && transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM,

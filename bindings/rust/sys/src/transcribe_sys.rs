@@ -1525,6 +1525,7 @@ unsafe extern "C" {
 pub struct transcribe_parakeet_stream_ext {
     pub ext: transcribe_ext,
     pub att_context_right: i32,
+    pub vocabulary_boost: f32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -1536,6 +1537,8 @@ const _: () = {
         [::std::mem::offset_of!(transcribe_parakeet_stream_ext, ext) - 0usize];
     ["Offset of field: transcribe_parakeet_stream_ext::att_context_right"]
         [::std::mem::offset_of!(transcribe_parakeet_stream_ext, att_context_right) - 16usize];
+    ["Offset of field: transcribe_parakeet_stream_ext::vocabulary_boost"]
+        [::std::mem::offset_of!(transcribe_parakeet_stream_ext, vocabulary_boost) - 20usize];
 };
 unsafe extern "C" {
     pub fn transcribe_parakeet_stream_ext_init(ext: *mut transcribe_parakeet_stream_ext);

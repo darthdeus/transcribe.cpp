@@ -11,7 +11,7 @@ use crate::result::owned_str;
 use crate::types::CommitPolicy;
 
 /// Options for beginning a stream.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),

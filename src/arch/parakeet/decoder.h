@@ -29,6 +29,7 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "phrase_boost.h"
 #include "transcribe.h"
 
 #include <cstdint>
@@ -223,7 +224,8 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
                                     int                        T_enc,
                                     int                        d_enc,
                                     int                        n_threads,
-                                    std::vector<TdtToken> &    out_tokens);
+                                    std::vector<TdtToken> &    out_tokens,
+                                    const PhraseBoost *        boost = nullptr);
 
 // Run RNNT greedy decode end-to-end. Same predictor + joint code as TDT,
 // but the joint emits `vocab+1` logits (no duration extras) and the step
@@ -235,7 +237,8 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
                                      int                        T_enc,
                                      int                        d_enc,
                                      int                        n_threads,
-                                     std::vector<TdtToken> &    out_tokens);
+                                     std::vector<TdtToken> &    out_tokens,
+                                     const PhraseBoost *        boost = nullptr);
 
 // Streaming variant of RNN-T greedy decode. Consumes T_enc_new encoder
 // frames (the chunk just produced) and APPENDS emitted tokens to
@@ -244,6 +247,8 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 // index of this chunk's first frame (so step_at_emit lands in
 // stream-wide coordinates). state_io must have been reset to a fresh
 // start-of-sequence state at stream_begin (last_token_io = -1).
+// boost / boost_state_io: optional phrase boosting (see phrase_boost.h);
+// the trie state carries across chunks like the LSTM state (0 = root).
 transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
                                                const float *              enc_out,
                                                int                        T_enc_new,
@@ -252,7 +257,9 @@ transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
                                                int &                      last_token_io,
                                                int                        frame_offset,
                                                int                        n_threads,
-                                               std::vector<TdtToken> &    out_tokens);
+                                               std::vector<TdtToken> &    out_tokens,
+                                               const PhraseBoost *        boost          = nullptr,
+                                               int32_t *                  boost_state_io = nullptr);
 
 // Run CTC greedy decode end-to-end. Per-frame: logits = W @ enc[t] + b,
 // argmax; collapse rule "drop adjacent duplicates, then drop blanks"
